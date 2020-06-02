@@ -95,6 +95,7 @@ pipeline:
         op: runtime::tremor
         config:
           script: |
+            use tremor::system;
             let event.tags.host = system::hostname();
             emit
       - id: batch

@@ -137,7 +137,7 @@ impl Onramp for File {
         let (manager, tx) =
             SourceManager::new(source, preprocessors, codec, metrics_reporter).await?;
         thread::Builder::new()
-            .name(format!("onramp-file-{}", self.config.source))
+            .name(format!("on-file-{}", self.config.source))
             .spawn(move || task::block_on(manager.run()))?;
         Ok(tx)
     }
