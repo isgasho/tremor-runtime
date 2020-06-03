@@ -80,13 +80,33 @@ rental! {
         }
     }
 }
-
 impl rentals::MessageStream {
     #[allow(mutable_transmutes, clippy::transmute_ptr_to_ptr, clippy::mut_from_ref)]
     unsafe fn mut_suffix(
         &self,
     ) -> &mut stream_consumer::MessageStream<'static, LoggingConsumerContext> {
         std::mem::transmute(self.suffix())
+    }
+
+    fn stop(&mut self) {
+        // We can't access the consumer itself so we got to trick around things
+        #[allow(dead_code)]
+        struct RentalSnotMessageStream {
+            consumer: Box<LoggingConsumer>,
+            stream: stream_consumer::MessageStream<'static, LoggingConsumerContext>,
+        }
+        let snot: &mut RentalSnotMessageStream = unsafe { std::mem::transmute(self) };
+        snot.consumer.stop()
+    }
+
+    fn start(&mut self) {
+        // We can't access the consumer itself so we got to trick around things
+        struct RentalSnotMessageStream {
+            consumer: Box<LoggingConsumer>,
+            stream: stream_consumer::MessageStream<'static, LoggingConsumerContext>,
+        }
+        let snot: &mut RentalSnotMessageStream = unsafe { std::mem::transmute(self) };
+        snot.stream = snot.consumer.start();
     }
 }
 
@@ -137,11 +157,21 @@ impl ConsumerContext for LoggingConsumerContext {
         };
     }
 }
-
 pub type LoggingConsumer = StreamConsumer<LoggingConsumerContext>;
 
 #[async_trait::async_trait()]
 impl Source for KafkaInt {
+    fn trigger_breaker(&mut self) {
+        if let Some(stream) = &mut self.stream {
+            stream.stop();
+        }
+    }
+    fn restore_breaker(&mut self) {
+        if let Some(stream) = &mut self.stream {
+            stream.start();
+        }
+    }
+
     async fn read(&mut self) -> Result<SourceReply> {
         if let Some(stream) = &mut self.stream {
             let stream = unsafe { stream.mut_suffix() };
@@ -287,8 +317,6 @@ impl Source for KafkaInt {
 
         Ok(SourceState::Connected)
     }
-    fn trigger_breaker(&mut self) {}
-    fn restore_breaker(&mut self) {}
 }
 
 #[async_trait::async_trait]
