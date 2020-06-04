@@ -61,6 +61,11 @@ struct FileInt {
     lines: ArghDyn,
     origin_uri: EventOriginUri,
 }
+impl std::fmt::Debug for FileInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "File")
+    }
+}
 impl FileInt {
     async fn from_config(config: Config) -> Result<Self> {
         let source_data_file = BufReader::new(FSFile::open(&config.source).await?);
@@ -121,8 +126,6 @@ impl Source for FileInt {
     async fn init(&mut self) -> Result<SourceState> {
         Ok(SourceState::Connected)
     }
-    fn trigger_breaker(&mut self) {}
-    fn restore_breaker(&mut self) {}
 }
 
 #[async_trait::async_trait]

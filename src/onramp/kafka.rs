@@ -68,6 +68,12 @@ pub struct KafkaInt {
     origin_uri: EventOriginUri,
 }
 
+impl std::fmt::Debug for KafkaInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Kafka")
+    }
+}
+
 rental! {
     pub mod rentals {
         use super::{LoggingConsumerContext, LoggingConsumer};
@@ -80,33 +86,13 @@ rental! {
         }
     }
 }
+#[allow(dead_code)]
 impl rentals::MessageStream {
     #[allow(mutable_transmutes, clippy::transmute_ptr_to_ptr, clippy::mut_from_ref)]
     unsafe fn mut_suffix(
         &self,
     ) -> &mut stream_consumer::MessageStream<'static, LoggingConsumerContext> {
         std::mem::transmute(self.suffix())
-    }
-
-    fn stop(&mut self) {
-        // We can't access the consumer itself so we got to trick around things
-        #[allow(dead_code)]
-        struct RentalSnotMessageStream {
-            consumer: Box<LoggingConsumer>,
-            stream: stream_consumer::MessageStream<'static, LoggingConsumerContext>,
-        }
-        let snot: &mut RentalSnotMessageStream = unsafe { std::mem::transmute(self) };
-        snot.consumer.stop()
-    }
-
-    fn start(&mut self) {
-        // We can't access the consumer itself so we got to trick around things
-        struct RentalSnotMessageStream {
-            consumer: Box<LoggingConsumer>,
-            stream: stream_consumer::MessageStream<'static, LoggingConsumerContext>,
-        }
-        let snot: &mut RentalSnotMessageStream = unsafe { std::mem::transmute(self) };
-        snot.stream = snot.consumer.start();
     }
 }
 
@@ -161,43 +147,25 @@ pub type LoggingConsumer = StreamConsumer<LoggingConsumerContext>;
 
 #[async_trait::async_trait()]
 impl Source for KafkaInt {
-    fn trigger_breaker(&mut self) {
-        if let Some(stream) = &mut self.stream {
-            stream.stop();
-        }
-    }
-    fn restore_breaker(&mut self) {
-        if let Some(stream) = &mut self.stream {
-            stream.start();
-        }
-    }
-
     async fn read(&mut self) -> Result<SourceReply> {
-        if let Some(stream) = &mut self.stream {
-            let stream = unsafe { stream.mut_suffix() };
-            if let Some(m) = stream.next().await {
-                if let Ok(m) = m {
-                    if let Some(data) = m.payload_view::<[u8]>() {
-                        if let Ok(data) = data {
-                            let mut origin_uri = self.origin_uri.clone();
-                            origin_uri.path = vec![
-                                m.topic().to_string(),
-                                m.partition().to_string(),
-                                m.offset().to_string(),
-                            ];
-                            Ok(SourceReply::Data {
-                                origin_uri: origin_uri,
-                                data: data.to_vec(),
-                                stream: 0,
-                            })
-                        } else {
-                            error!("failed to fetch data from kafka");
-                            Ok(SourceReply::Empty(100))
-                        }
-                    } else {
-                        error!("Failed to fetch kafka message.");
-                        Ok(SourceReply::Empty(100))
-                    }
+        if let Some(stream) = self
+            .stream
+            .as_mut()
+            .map(|stream| unsafe { stream.mut_suffix() })
+        {
+            if let Some(Ok(m)) = stream.next().await {
+                if let Some(Ok(data)) = m.payload_view::<[u8]>() {
+                    let mut origin_uri = self.origin_uri.clone();
+                    origin_uri.path = vec![
+                        m.topic().to_string(),
+                        m.partition().to_string(),
+                        m.offset().to_string(),
+                    ];
+                    Ok(SourceReply::Data {
+                        origin_uri: origin_uri,
+                        data: data.to_vec(),
+                        stream: 0,
+                    })
                 } else {
                     error!("Failed to fetch kafka message.");
                     Ok(SourceReply::Empty(100))
