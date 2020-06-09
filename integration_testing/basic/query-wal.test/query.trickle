@@ -1,0 +1,6 @@
+define generic::wal operator wal;
+
+create operator wal;
+
+select event from in into wal;
+select event from wal into out;

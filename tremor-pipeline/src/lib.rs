@@ -357,7 +357,7 @@ pub fn buildin_ops(
     // Resolve from registry
 
     use op::debug::EventHistoryFactory;
-    use op::generic::{BackpressureFactory, BatchFactory, CounterFactory};
+    use op::generic::{BackpressureFactory, BatchFactory, CounterFactory, WalFactory};
     use op::grouper::BucketGrouperFactory;
     use op::identity::PassthroughFactory;
     use op::runtime::TremorFactory;
@@ -370,6 +370,7 @@ pub fn buildin_ops(
         ["generic", "batch"] => BatchFactory::new_boxed(),
         ["generic", "backpressure"] => BackpressureFactory::new_boxed(),
         ["generic", "counter"] => CounterFactory::new_boxed(),
+        ["generic", "wal"] => WalFactory::new_boxed(),
         [namespace, name] => {
             return Err(ErrorKind::UnknownOp((*namespace).to_string(), (*name).to_string()).into());
         }

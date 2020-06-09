@@ -41,6 +41,7 @@ error_chain! {
         UTF8Error(std::str::Utf8Error);
         ParseIntError(std::num::ParseIntError);
         ParseFloatError(std::num::ParseFloatError);
+        WAL(sled::Error);
     }
 
     errors {
