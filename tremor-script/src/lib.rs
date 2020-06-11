@@ -264,6 +264,11 @@ impl Clone for LineValue {
         })
     }
 }
+impl Default for LineValue {
+    fn default() -> Self {
+        Self::new(vec![], |_| ValueAndMeta::default())
+    }
+}
 
 impl Serialize for LineValue {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

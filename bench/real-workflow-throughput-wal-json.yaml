@@ -34,6 +34,10 @@ pipeline:
     nodes:
       - id: wal
         op: generic::wal
+        config:
+          dir: wal
+          read_count: 10
+          max_elements: 100
       - id: runtime
         op: runtime::tremor
         config:

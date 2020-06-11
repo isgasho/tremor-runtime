@@ -63,7 +63,7 @@ pub(crate) mod op;
 /// Tools to turn tremor query into pipelines
 pub mod query;
 
-pub use op::{ConfigImpl, InitializableOperator, Operator, SignalResponse};
+pub use op::{ConfigImpl, InitializableOperator, Operator};
 pub use tremor_script::prelude::EventOriginUri;
 pub(crate) type PortIndexMap =
     HashMap<(NodeIndex, Cow<'static, str>), Vec<(NodeIndex, Cow<'static, str>)>>;
@@ -125,8 +125,16 @@ pub enum NodeKind {
     Operator,
 }
 
-/// A tremor event
+/// A circuit breaker action
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CBAction {
+    /// The circuit breaker is triggerd and should break
+    Trigger,
+    /// The circuit breaker is restored and should work again
+    Restore,
+}
+/// A tremor event
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Event {
     /// The event ID
     pub id: u64,
@@ -140,19 +148,8 @@ pub struct Event {
     pub kind: Option<SignalKind>,
     /// If this event is batched (containing multiple events itself)
     pub is_batch: bool,
-}
-
-impl Default for Event {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            data: Value::null().into(),
-            ingest_ns: 0,
-            origin_uri: None,
-            kind: None,
-            is_batch: false,
-        }
-    }
+    /// Circuit breaker action
+    pub cb: Option<CBAction>,
 }
 
 impl Event {
@@ -318,7 +315,7 @@ impl Operator for OperatorNode {
     fn handles_signal(&self) -> bool {
         self.op.handles_signal()
     }
-    fn on_signal(&mut self, signal: &mut Event) -> Result<SignalResponse> {
+    fn on_signal(&mut self, signal: &mut Event) -> Result<crate::op::SignalResponse> {
         self.op.on_signal(signal)
     }
 
@@ -809,13 +806,11 @@ impl ExecutableGraph {
                         self.metrics_idx,
                         "in".into(),
                         Event {
-                            id: 0,
                             data: LineValue::new(vec![], |_| ValueAndMeta::from(value)),
                             ingest_ns: timestamp,
                             // TODO update this to point to tremor instance producing the metrics?
                             origin_uri: None,
-                            kind: None,
-                            is_batch: false,
+                            ..std::default::Default::default()
                         },
                     ));
                 }
@@ -826,13 +821,11 @@ impl ExecutableGraph {
                         self.metrics_idx,
                         "in".into(),
                         Event {
-                            id: 0,
                             data: LineValue::new(vec![], |_| ValueAndMeta::from(value)),
                             ingest_ns: timestamp,
                             // TODO update this to point to tremor instance producing the metrics?
                             origin_uri: None,
-                            kind: None,
-                            is_batch: false,
+                            ..std::default::Default::default()
                         },
                     ));
                 }
@@ -1014,12 +1007,10 @@ mod test {
             .to_executable_graph(buildin_ops)
             .expect("failed to build executable graph");
         let event1 = Event {
-            is_batch: false,
             id: 1,
             ingest_ns: 1,
-            origin_uri: None,
             data: Value::from(json!({"snot": "badger"})).into(),
-            kind: None,
+            ..std::default::Default::default()
         };
         let mut results = Vec::new();
         e.enqueue("in", event1, &mut results)
@@ -1058,12 +1049,10 @@ mod test {
             .to_executable_graph(buildin_ops)
             .expect("failed to build executable graph");
         let event1 = Event {
-            is_batch: false,
             id: 1,
             ingest_ns: 1,
-            origin_uri: None,
             data: Value::null().into(),
-            kind: None,
+            ..std::default::Default::default()
         };
         let mut results = Vec::new();
         e.enqueue("in", event1, &mut results)
@@ -1082,20 +1071,14 @@ mod test {
             .to_executable_graph(buildin_ops)
             .expect("failed to build executable graph");
         let event1 = Event {
-            is_batch: false,
             id: 1,
             ingest_ns: 1,
-            origin_uri: None,
-            data: Value::null().into(),
-            kind: None,
+            ..std::default::Default::default()
         };
         let event2 = Event {
-            is_batch: false,
             id: 2,
             ingest_ns: 2,
-            origin_uri: None,
-            data: Value::null().into(),
-            kind: None,
+            ..std::default::Default::default()
         };
         let mut results = Vec::new();
         e.enqueue("in1", event1, &mut results)

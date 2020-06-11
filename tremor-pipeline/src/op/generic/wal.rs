@@ -13,52 +13,118 @@
 // limitations under the License.
 
 use crate::op::prelude::*;
+use byteorder::{BigEndian, ReadBytesExt};
+use sled::Transactional;
+use std::io::Cursor;
 use std::mem;
 use tremor_script::prelude::*;
 
 const OUT: Cow<'static, str> = Cow::Borrowed("out");
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Config {
+    /// Maximum number of events to read per tick/event when filling
+    /// up from the persistant storage
+    pub read_count: usize,
+
+    /// The directory to store data in
+    pub dir: String,
+
+    /// The maximum elements to store before breaking the circuit
+    pub max_elements: usize,
+}
+
+impl ConfigImpl for Config {}
+
 #[derive(Debug, Clone)]
 // TODO add seed value and field name as config items
 pub struct WAL {
+    cnt: usize,
     wal: sled::Db,
+    events_tree: sled::Tree,
+    state_tree: sled::Tree,
     write: usize,
-    read: usize,
-    read_count: usize,
+    config: Config,
     broken: bool,
 }
 
-op!(WalFactory(_node) {
-    let wal = sled::open("./wal")?;
-    Ok(Box::new(WAL{
-        wal,
-        read: 1,
-        write: 0,
-        read_count: 5,
-        broken: false
-    }))
+op!(WalFactory(node) {
+    if let Some(map) = &node.config {
+        let config: Config = Config::new(map)?;
+
+        let wal = sled::open(&config.dir)?;
+        let events_tree = wal.open_tree("events")?;
+        let state_tree = wal.open_tree("state")?;
+
+        let write = state_tree.get("write")?.and_then(|v| {let mut rdr = Cursor::new(&v); rdr.read_u64::<BigEndian>().ok().map(|v| v as usize) } ).unwrap_or(0);
+        dbg!(write);
+        Ok(Box::new(WAL{
+            cnt: events_tree.len(),
+            wal,
+            write,
+            events_tree,
+            state_tree,
+            config,
+            broken: false
+        }))
+    } else {
+        Err(ErrorKind::MissingOpConfig(node.id.to_string()).into())
+    }
 });
 
 impl WAL {
     fn read_events(&mut self) -> Result<Vec<(Cow<'static, str>, Event)>> {
-        // get the ID where to read from
-        let read_buf: [u8; 8] = unsafe { mem::transmute(self.read.to_be()) };
         // The maximum number of entries we read
-        let read_end = self.read + self.read_count;
-        let read_end_buf: [u8; 8] = unsafe { mem::transmute(read_end.to_be()) };
-        let mut events = Vec::with_capacity(self.read_count);
-        for e in self.wal.range(read_buf..=read_end_buf).values() {
-            self.read += 1;
-            let e_slice: &[u8] = &e?;
-            let mut ev = Vec::from(e_slice);
-            let event = simd_json::from_slice(&mut ev)?;
-            events.push((OUT, event))
+        let mut events = Vec::with_capacity(self.config.read_count);
+
+        for _ in 0..self.config.read_count {
+            if let Some((_, e)) = self.events_tree.pop_min()? {
+                self.cnt -= 1;
+                let e_slice: &[u8] = &e;
+                let mut ev = Vec::from(e_slice);
+                let event = simd_json::from_slice(&mut ev)?;
+                events.push((OUT, event))
+            } else {
+                break;
+            }
         }
+
         Ok(events)
     }
 }
 #[allow(unused_mut)]
 impl Operator for WAL {
+    fn handles_contraflow(&self) -> bool {
+        true
+    }
+    fn on_contraflow(&mut self, insight: &mut Event) {
+        if insight.cb == Some(CBAction::Restore) {
+            self.broken = false;
+        } else if insight.cb == Some(CBAction::Trigger) {
+            self.broken = true;
+        }
+        insight.cb = None;
+    }
+    fn handles_signal(&self) -> bool {
+        true
+    }
+
+    fn on_signal(&mut self, signal: &mut Event) -> Result<SignalResponse> {
+        if self.config.max_elements < self.cnt {
+            let e = Event {
+                ingest_ns: signal.ingest_ns,
+                cb: Some(CBAction::Trigger),
+                ..std::default::Default::default()
+            };
+            dbg!("full", self.write);
+            Ok((vec![], Some(e)))
+        } else if self.broken {
+            Ok((vec![], None))
+        } else {
+            Ok((self.read_events()?, None))
+        }
+    }
+
     fn on_event(
         &mut self,
         _port: &str,
@@ -71,7 +137,13 @@ impl Operator for WAL {
 
         // Sieralize and write the event
         let event_buf = simd_json::serde::to_vec(&event)?;
-        self.wal.insert(write_buf, event_buf)?;
+        (&self.events_tree, &self.state_tree).transaction(|(events_tree, state_tree)| {
+            events_tree.insert(&write_buf, event_buf.as_slice())?;
+            state_tree.insert("write", &write_buf)?;
+            Ok(())
+        })?;
+        self.cnt += 1;
+
         if self.broken {
             Ok(vec![])
         } else {
