@@ -162,6 +162,23 @@ impl Event {
             idx: 0,
         }
     }
+    /// Creates a new event to restore a CB
+    pub fn cb_restore(ingest_ns: u64) -> Self {
+        Event {
+            ingest_ns,
+            cb: Some(CBAction::Restore),
+            ..Event::default()
+        }
+    }
+
+    /// Creates a new event to trigger a CB
+    pub fn cb_trigger(ingest_ns: u64) -> Self {
+        Event {
+            ingest_ns,
+            cb: Some(CBAction::Trigger),
+            ..Event::default()
+        }
+    }
 }
 
 /// Iterator over the event value and metadata
@@ -810,7 +827,7 @@ impl ExecutableGraph {
                             ingest_ns: timestamp,
                             // TODO update this to point to tremor instance producing the metrics?
                             origin_uri: None,
-                            ..std::default::Default::default()
+                            ..Event::default()
                         },
                     ));
                 }
@@ -825,7 +842,7 @@ impl ExecutableGraph {
                             ingest_ns: timestamp,
                             // TODO update this to point to tremor instance producing the metrics?
                             origin_uri: None,
-                            ..std::default::Default::default()
+                            ..Event::default()
                         },
                     ));
                 }
@@ -866,15 +883,23 @@ impl ExecutableGraph {
         }
     }
     /// Enque a contraflow insight
-    pub fn contraflow(&mut self, mut insight: Event) -> Event {
+    pub fn contraflow(&mut self, mut skip_to: Option<usize>, mut insight: Event) -> Event {
         for idx in &self.contraflow {
-            let op = unsafe { self.graph.get_unchecked_mut(*idx) }; // We know this exists
-            op.on_contraflow(&mut insight);
+            if skip_to.is_none() {
+                let op = unsafe { self.graph.get_unchecked_mut(*idx) }; // We know this exists
+                op.on_contraflow(&mut insight);
+            } else if skip_to == Some(*idx) {
+                skip_to = None
+            }
         }
         insight
     }
     /// Enque a signal
-    pub fn enqueue_signal(&mut self, signal: Event, returns: &mut Returns) -> Result<Vec<Event>> {
+    pub fn enqueue_signal(
+        &mut self,
+        signal: Event,
+        returns: &mut Returns,
+    ) -> Result<Vec<(usize, Event)>> {
         let mut insights = Vec::with_capacity(16);
         if self.signalflow(signal, &mut insights)? {
             self.run(returns)?;
@@ -882,7 +907,11 @@ impl ExecutableGraph {
         Ok(insights)
     }
 
-    fn signalflow(&mut self, mut signal: Event, insights: &mut Vec<Event>) -> Result<bool> {
+    fn signalflow(
+        &mut self,
+        mut signal: Event,
+        insights: &mut Vec<(usize, Event)>,
+    ) -> Result<bool> {
         let mut has_events = false;
         for idx in 0..self.signalflow.len() {
             let i = self.signalflow[idx];
@@ -891,7 +920,7 @@ impl ExecutableGraph {
                 op.on_signal(&mut signal)?
             };
             if let Some(cf) = cf {
-                insights.push(cf);
+                insights.push((i, cf));
             }
             has_events = has_events || !res.is_empty();
             self.enqueue_events(i, res);
@@ -1010,7 +1039,7 @@ mod test {
             id: 1,
             ingest_ns: 1,
             data: Value::from(json!({"snot": "badger"})).into(),
-            ..std::default::Default::default()
+            ..Event::default()
         };
         let mut results = Vec::new();
         e.enqueue("in", event1, &mut results)
@@ -1052,7 +1081,7 @@ mod test {
             id: 1,
             ingest_ns: 1,
             data: Value::null().into(),
-            ..std::default::Default::default()
+            ..Event::default()
         };
         let mut results = Vec::new();
         e.enqueue("in", event1, &mut results)
@@ -1073,12 +1102,12 @@ mod test {
         let event1 = Event {
             id: 1,
             ingest_ns: 1,
-            ..std::default::Default::default()
+            ..Event::default()
         };
         let event2 = Event {
             id: 2,
             ingest_ns: 2,
-            ..std::default::Default::default()
+            ..Event::default()
         };
         let mut results = Vec::new();
         e.enqueue("in1", event1, &mut results)

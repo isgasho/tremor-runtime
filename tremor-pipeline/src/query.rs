@@ -637,7 +637,7 @@ pub(crate) fn supported_operators(
         ["generic", "counter"] => CounterFactory::new_boxed().from_node(config)?,
         ["generic", "wal"] => WalFactory::new_boxed().from_node(config)?,
         [namespace, name] => {
-            return Err(ErrorKind::UnknownOp(namespace.to_string(), name.to_string()).into());
+            return Err(ErrorKind::UnknownOp((*namespace).to_string(), (*name).to_string()).into());
         }
         _ => return Err(ErrorKind::UnknownNamespace(config.op_type.clone()).into()),
     };

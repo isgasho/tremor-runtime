@@ -98,13 +98,60 @@ impl offramp::Impl for Ws {
 }
 
 impl Offramp for Ws {
-    fn on_event(&mut self, codec: &Box<dyn Codec>, _input: String, event: Event) -> Result<()> {
+    fn is_active(&self) -> bool {
+        self.addr.is_some()
+    }
+
+    fn on_signal(&mut self, event: Event) -> Option<Event> {
         task::block_on(async {
+            let mut new_connect = false;
+            let was_connected = self.addr.is_none();
             while !self.rx.is_empty() {
                 self.addr = self.rx.recv().await.unwrap_or_default();
+                new_connect = self.addr.is_some();
+            }
+            if was_connected && !new_connect {
+                for p in self.pipelines.values() {
+                    if let Err(e) = p
+                        .addr
+                        .send(pipeline::Msg::Insight(Event::cb_trigger(event.ingest_ns)))
+                    {
+                        error!("[WS Offramp] failed to return CB data: {}", e);
+                    }
+                }
+            } else if new_connect {
+                for p in self.pipelines.values() {
+                    if let Err(e) = p
+                        .addr
+                        .send(pipeline::Msg::Insight(Event::cb_restore(event.ingest_ns)))
+                    {
+                        error!("[WS Offramp] failed to return CB data: {}", e);
+                    }
+                }
+            }
+        });
+        None
+    }
+
+    fn on_event(&mut self, codec: &Box<dyn Codec>, _input: String, event: Event) -> Result<()> {
+        task::block_on(async {
+            let mut new_connect = false;
+            while !self.rx.is_empty() {
+                self.addr = self.rx.recv().await.unwrap_or_default();
+                new_connect = self.addr.is_some();
             }
 
             if let Some(addr) = &self.addr {
+                if new_connect {
+                    for p in self.pipelines.values() {
+                        if let Err(e) = p
+                            .addr
+                            .send(pipeline::Msg::Insight(Event::cb_restore(event.ingest_ns)))
+                        {
+                            error!("[WS Offramp] failed to return CB data: {}", e);
+                        }
+                    }
+                }
                 for value in event.value_iter() {
                     let raw = codec.encode(value)?;
                     let datas = postprocess(&mut self.postprocessors, event.ingest_ns, raw)?;
@@ -120,6 +167,14 @@ impl Offramp for Ws {
                     }
                 }
             } else {
+                for p in self.pipelines.values() {
+                    if let Err(e) = p
+                        .addr
+                        .send(pipeline::Msg::Insight(Event::cb_trigger(event.ingest_ns)))
+                    {
+                        error!("[WS Offramp] failed to return CB data: {}", e);
+                    }
+                }
                 return Err(Error::from("not connected"));
             };
             Ok(())

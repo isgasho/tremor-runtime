@@ -122,7 +122,7 @@ mod test {
             id: 1,
             ingest_ns: 1,
             data: Value::from("badger").into(),
-            ..std::default::Default::default()
+            ..Event::default()
         };
 
         let mut state = Value::null();

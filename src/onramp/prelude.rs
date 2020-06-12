@@ -23,7 +23,7 @@ pub(crate) use crate::url::TremorURL;
 pub(crate) use crate::utils::{hostname, nanotime, ConfigImpl};
 pub(crate) use async_std::sync::{channel, Receiver, Sender};
 pub(crate) use async_std::task;
-pub(crate) use tremor_pipeline::EventOriginUri;
+pub(crate) use tremor_pipeline::{Event, EventOriginUri};
 use tremor_script::LineValue;
 
 // TODO pub here too?
@@ -65,16 +65,16 @@ pub(crate) fn transmit_event(
     metrics_reporter: &mut RampReporter,
     data: LineValue,
     ingest_ns: u64,
-    origin_uri: tremor_pipeline::EventOriginUri,
+    origin_uri: EventOriginUri,
     id: u64,
 ) {
-    let event = tremor_pipeline::Event {
+    let event = Event {
         id,
         data,
         ingest_ns,
         // TODO make origin_uri non-optional here too?
         origin_uri: Some(origin_uri),
-        ..std::default::Default::default()
+        ..Event::default()
     };
     if let Some(((input, addr), pipelines)) = pipelines.split_last() {
         metrics_reporter.periodic_flush(ingest_ns);
@@ -110,7 +110,7 @@ pub(crate) fn send_event(
     codec: &mut Box<dyn Codec>,
     metrics_reporter: &mut RampReporter,
     ingest_ns: &mut u64,
-    origin_uri: tremor_pipeline::EventOriginUri,
+    origin_uri: &tremor_pipeline::EventOriginUri,
     id: u64,
     data: Vec<u8>,
 ) {

@@ -20,8 +20,6 @@ use crate::{offramp, onramp};
 use async_std::sync::channel;
 use async_std::task::{self, JoinHandle};
 use crossbeam_channel::{bounded, Sender as CbSender};
-use simd_json::prelude::*;
-use simd_json::BorrowedValue;
 use std::borrow::Cow;
 use std::time::Duration;
 use std::{fmt, thread};
@@ -157,11 +155,12 @@ fn send_signal(
 
 #[inline]
 async fn handle_insight(
+    skip_to: Option<usize>,
     insight: Event,
     pipeline: &mut ExecutableGraph,
     onramps: &halfbrown::HashMap<TremorURL, onramp::Addr>,
 ) {
-    let insight = pipeline.contraflow(insight);
+    let insight = pipeline.contraflow(skip_to, insight);
     if insight.cb == Some(CBAction::Trigger) {
         dbg!("trigger");
         for (_k, o) in onramps {
@@ -221,11 +220,11 @@ impl Manager {
         let tick_tx = tx.clone();
         task::spawn(async move {
             let mut e = Event {
-                data: (BorrowedValue::null(), BorrowedValue::object()).into(),
                 ingest_ns: nanotime(),
                 kind: Some(SignalKind::Tick),
-                ..std::default::Default::default()
+                ..Event::default()
             };
+
             while tick_tx.send(Msg::Signal(e.clone())).is_ok() {
                 task::sleep(Duration::from_millis(TICK_MS)).await;
                 e.ingest_ns = nanotime()
@@ -248,26 +247,31 @@ impl Manager {
                             }
                         }
                         Msg::Insight(insight) => {
-                            task::block_on(handle_insight(insight, &mut pipeline, &onramps))
+                            task::block_on(handle_insight(None, insight, &mut pipeline, &onramps))
                         }
-                        Msg::Signal(signal) => match pipeline
-                            .enqueue_signal(signal.clone(), &mut eventset)
-                        {
-                            Ok(insights) => {
-                                if let Err(e) = send_signal(&id, signal, &dests) {
-                                    error!("Failed to send signal: {}", e)
-                                }
+                        Msg::Signal(signal) => {
+                            match pipeline.enqueue_signal(signal.clone(), &mut eventset) {
+                                Ok(insights) => {
+                                    if let Err(e) = send_signal(&id, signal, &dests) {
+                                        error!("Failed to send signal: {}", e)
+                                    }
 
-                                for insight in insights {
-                                    task::block_on(handle_insight(insight, &mut pipeline, &onramps))
-                                }
+                                    for (skip_to, insight) in insights {
+                                        task::block_on(handle_insight(
+                                            Some(skip_to),
+                                            insight,
+                                            &mut pipeline,
+                                            &onramps,
+                                        ))
+                                    }
 
-                                if let Err(e) = send_events(&mut eventset, &dests) {
-                                    error!("Failed to send event: {}", e)
+                                    if let Err(e) = send_events(&mut eventset, &dests) {
+                                        error!("Failed to send event: {}", e)
+                                    }
                                 }
+                                Err(e) => error!("error: {:?}", e),
                             }
-                            Err(e) => error!("error: {:?}", e),
-                        },
+                        }
                         Msg::ConnectOfframp(output, offramp_id, offramp) => {
                             info!(
                                 "[Pipeline:{}] connecting {} to offramp {}",

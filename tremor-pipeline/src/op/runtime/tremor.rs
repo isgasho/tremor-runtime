@@ -140,7 +140,7 @@ mod test {
             id: 1,
             ingest_ns: 1,
             data: Value::from(json!({"a": 1})).into(),
-            ..std::default::Default::default()
+            ..Event::default()
         };
         let mut state = Value::null();
 

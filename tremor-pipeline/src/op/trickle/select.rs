@@ -653,7 +653,7 @@ impl Operator for TrickleSelect {
                             is_batch: event.is_batch,
                             kind: event.kind,
                             data: (result.into_static(), event_meta.clone_static()).into(),
-                            ..std::default::Default::default()
+                            ..Event::default()
                         },
                     ));
                 } else {
@@ -850,7 +850,7 @@ impl Operator for TrickleSelect {
                         is_batch: event.is_batch,
                         kind: event.kind,
                         data: (result.into_static(), event_meta.clone_static()).into(),
-                        ..std::default::Default::default()
+                        ..Event::default()
                     },
                 ));
             }
@@ -910,7 +910,7 @@ mod test {
                "h2g2" : 42,
             }))
             .into(),
-            ..std::default::Default::default()
+            ..Event::default()
         }
     }
 

@@ -31,6 +31,8 @@ pub struct Config {
     pub dir: String,
 
     /// The maximum elements to store before breaking the circuit
+    /// note this is an approximation we might store a few elements
+    /// above that to allow circuit breakers to kick in
     pub max_elements: usize,
 }
 
@@ -39,13 +41,24 @@ impl ConfigImpl for Config {}
 #[derive(Debug, Clone)]
 // TODO add seed value and field name as config items
 pub struct WAL {
+    /// Elements currently in the event storage
     cnt: usize,
+    /// general DB
     wal: sled::Db,
+    /// event storage
     events_tree: sled::Tree,
+    /// state storage (written, etc)
     state_tree: sled::Tree,
+    /// Next index
     write: usize,
+    /// The configuration
     config: Config,
+    /// Are we currently in a broken CB state
     broken: bool,
+    /// Did we signal because we're full
+    full: bool,
+    /// ID of this operator
+    origin_uri: Option<EventOriginUri>,
 }
 
 op!(WalFactory(node) {
@@ -56,6 +69,7 @@ op!(WalFactory(node) {
         let events_tree = wal.open_tree("events")?;
         let state_tree = wal.open_tree("state")?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let write = state_tree.get("write")?.and_then(|v| {let mut rdr = Cursor::new(&v); rdr.read_u64::<BigEndian>().ok().map(|v| v as usize) } ).unwrap_or(0);
         dbg!(write);
         Ok(Box::new(WAL{
@@ -65,7 +79,14 @@ op!(WalFactory(node) {
             events_tree,
             state_tree,
             config,
-            broken: false
+            broken: true,
+            full: false,
+            origin_uri: Some(EventOriginUri {
+                scheme: "tremor-wal".to_string(),
+                host: "pipeline".to_string(),
+                port: None,
+                path: vec![node.id.to_string()],
+            })
         }))
     } else {
         Err(ErrorKind::MissingOpConfig(node.id.to_string()).into())
@@ -110,18 +131,28 @@ impl Operator for WAL {
     }
 
     fn on_signal(&mut self, signal: &mut Event) -> Result<SignalResponse> {
-        if self.config.max_elements < self.cnt {
-            let e = Event {
-                ingest_ns: signal.ingest_ns,
-                cb: Some(CBAction::Trigger),
-                ..std::default::Default::default()
-            };
-            dbg!("full", self.write);
-            Ok((vec![], Some(e)))
-        } else if self.broken {
-            Ok((vec![], None))
+        // Are we currently full
+        let now_full = self.config.max_elements < self.cnt;
+        // If we jsut became full or we went from full to non full
+        // update the CB status
+        let sig = if self.full && !now_full {
+            let mut e = Event::cb_restore(signal.ingest_ns);
+            e.origin_uri = self.origin_uri.clone();
+            Some(e)
+        } else if !self.full && now_full {
+            dbg!(self.cnt);
+            let mut e = Event::cb_trigger(signal.ingest_ns);
+            e.origin_uri = self.origin_uri.clone();
+            Some(e)
         } else {
-            Ok((self.read_events()?, None))
+            None
+        };
+        self.full = now_full;
+
+        if !self.broken {
+            Ok((self.read_events()?, sig))
+        } else {
+            Ok((vec![], sig))
         }
     }
 
